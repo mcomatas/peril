@@ -21,22 +21,45 @@ func main() {
 	}
 	defer conn.Close()
 
+	publishCh, err := conn.Channel()
+	if err != nil {
+		fmt.Println("Could not create channel")
+	}
+
 	fmt.Println("Connected to Peril server.")
 	username, err := gamelogic.ClientWelcome()
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+	gameState := gamelogic.NewGameState(username)
 
-	_, _, err = pubsub.DeclareAndBind(
+	err = pubsub.SubscribeJSON(
+		conn,
+		routing.ExchangePerilTopic,
+		routing.ArmyMovesPrefix+"."+username,
+		routing.ArmyMovesPrefix+".*",
+		pubsub.SimpleQueueTransient,
+		handlerMove(gameState),
+	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	err = pubsub.SubscribeJSON(
 		conn,
 		routing.ExchangePerilDirect,
 		fmt.Sprintf("%s.%s", routing.PauseKey, username),
 		routing.PauseKey,
 		pubsub.SimpleQueueTransient,
+		handlerPause(gameState),
 	)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 
-	gameState := gamelogic.NewGameState(username)
 	for {
 		words := gamelogic.GetInput()
 		if len(words) == 0 {
@@ -50,11 +73,23 @@ func main() {
 					continue
 				}
 			case "move":
-				_, err = gameState.CommandMove(words)
+				mv, err := gameState.CommandMove(words)
 				if err != nil {
 					fmt.Println(err)
 					continue
 				}
+
+				err = pubsub.PublishJSON(
+					publishCh,
+					routing.ExchangePerilTopic,
+					routing.ArmyMovesPrefix+"."+mv.Player.Username,
+					mv,
+				)
+				if err != nil {
+					fmt.Println(err)
+					continue
+				}
+				fmt.Printf("Moved %v units to %s\n", len(mv.Units), mv.ToLocation)
 			case "status":
 				gameState.CommandStatus()
 			case "help":
