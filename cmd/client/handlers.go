@@ -4,18 +4,62 @@ import (
 	"fmt"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/routing"
+	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState) {
-	return func(ps routing.PlayingState) {
+func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState) pubsub.AckType {
+	return func(ps routing.PlayingState) pubsub.AckType {
 		defer fmt.Print("> ")
 		gs.HandlePause(ps)
+		return pubsub.Ack
 	}
 }
 
-func handlerMove(gs *gamelogic.GameState) func(gamelogic.ArmyMove) {
-	return func(move gamelogic.ArmyMove) {
+func handlerMove(gs *gamelogic.GameState, ch *amqp.Channel) func(gamelogic.ArmyMove) pubsub.AckType {
+	return func(move gamelogic.ArmyMove) pubsub.AckType {
 		defer fmt.Print("> ")
-		gs.HandleMove(move)
+		outcome := gs.HandleMove(move)
+		if outcome == gamelogic.MoveOutComeSafe {
+			return pubsub.Ack
+		} else if outcome == gamelogic.MoveOutcomeMakeWar {
+			err := pubsub.PublishJSON(
+				ch,
+				routing.ExchangePerilTopic,
+				routing.WarRecognitionsPrefix+"."+gs.GetUsername(),
+				gamelogic.RecognitionOfWar{
+					Attacker: move.Player,
+					Defender: gs.GetPlayerSnap(),
+				},
+			)
+			if err != nil {
+				fmt.Println(err)
+				return pubsub.NackRequeue
+			}
+			return pubsub.Ack
+		}
+		return pubsub.NackDiscard
+	}
+}
+
+func handlerWar(gs *gamelogic.GameState) func(dw gamelogic.RecognitionOfWar) pubsub.AckType {
+	return func(dw gamelogic.RecognitionOfWar) pubsub.AckType {
+		defer fmt.Print("> ")
+		outcome, _, _ := gs.HandleWar(dw)
+		switch outcome {
+			case gamelogic.WarOutcomeNotInvolved:
+				return pubsub.NackRequeue
+			case gamelogic.WarOutcomeNoUnits:
+				return pubsub.NackDiscard
+			case gamelogic.WarOutcomeOpponentWon:
+				return pubsub.Ack
+			case gamelogic.WarOutcomeYouWon:
+				return pubsub.Ack
+			case gamelogic.WarOutcomeDraw:
+				return pubsub.Ack
+			default:
+				fmt.Println("Unknown war outcome: ", outcome)
+				return pubsub.NackDiscard
+		}
 	}
 }
