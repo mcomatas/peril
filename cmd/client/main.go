@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
@@ -40,7 +41,7 @@ func main() {
 		"war",
 		"war.#",
 		pubsub.SimpleQueueDurable,
-		handlerWar(gameState),
+		handlerWar(gameState, publishCh),
 	)
 	if err != nil {
 		fmt.Println(err)
@@ -108,7 +109,23 @@ func main() {
 			case "help":
 				gamelogic.PrintClientHelp()
 			case "spam":
-				fmt.Println("Spamming not allowed yet!")
+				if len(words) < 2 {
+					fmt.Println("Usage: spam <number>")
+					continue
+				}
+				num, err := strconv.Atoi(words[1])
+				if err != nil {
+					fmt.Println("Usage: spam <number>")
+					continue
+				}
+				for i := 0; i < num; i++ {
+					ml := gamelogic.GetMaliciousLog()
+					pubsub.PublishGameLog(
+						publishCh,
+						username,
+						ml,
+					)
+				}
 			case "quit":
 				gamelogic.PrintQuit()
 				return
